@@ -13,6 +13,11 @@ class Sender:
         self.socket.bind(('0.0.0.0', 0))
         self.waiting = False
 
+        self.window_size = 3
+        self.RTO = 0.5
+        self.cumulative_acks = 0
+        self.unacked_msgs = {}
+
         self.remote_host = None
         self.remote_port = None #remote host/port should be the same as host/port but we will update it when we get the first message back from the remote host to make sure we're talking to the same remote host/port
 
@@ -43,7 +48,7 @@ class Sender:
     def run(self):
         seq = 0
         while True:
-            sockets = [self.socket, sys.stdin] if not self.waiting else [self.socket]
+            sockets = [self.socket, sys.stdin] if len(self.unacked_msgs) < self.window_size else [self.socket]
 
             socks = select.select(sockets, [], [], 0.1)[0]
             for conn in socks:
