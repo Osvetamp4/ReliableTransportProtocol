@@ -74,50 +74,46 @@ class Sender:
             
         return longest_seq
 
-    def process_ack(self, ack_sequence):
-        pass
-    def send_msg(self, data, seq):
-        msg = { "type": "msg", "data": data, "seq": seq }
-        pass
+    def process_ack(self, data):
+        if data and data["type"] == "ack":
+            ack_sequence = data["seq"]
+            if ack_sequence in self.unacked_msgs: #already guards against duplicates
+                #add a check on this line for duplicate ACK concerns
+                self.acked_in_window_msgs.add(ack_sequence)
+                self.unacked_msgs.remove(ack_sequence)
+                            
+
+            if self.left_window_bound in self.acked_in_window_msgs: #if this passes, window_shift needs to be done
+                window_shift_length = len(self.get_longest_consecutive_from_min(self.acked_in_window_msgs)) #this gets us the amount we need to shift by
+                for i in range(window_shift_length):
+                    self.acked_in_window_msgs.remove(self.left_window_bound + i) #remove the acked messages that are no longer in the window from the set of acked messages in the window
+                self.left_window_bound += window_shift_length
+                self.right_window_bound += window_shift_length
+
+
+    def send_msg(self, current_seq):
+        data = sys.stdin.read(DATA_SIZE)
+        if len(data) == 0:
+            self.log("All done!")
+            sys.exit(0)
+        msg = { "type": "msg", "data": data, "seq": current_seq }
+        self.send(msg)
+        self.unacked_msgs.add(current_seq)
     
     def run(self):
         current_seq = 0
         while True:
             sockets = [self.socket, sys.stdin] if current_seq <= self.right_window_bound else [self.socket] #only read from sdtin IF window is not full
-
-
-           
             socks = select.select(sockets, [], [], 0.1)[0]
+            
             for conn in socks:
                 if conn == self.socket:
                     data = self.recv(conn)
-
-                    if data and data["type"] == "ack":
-                        ack_sequence = data["seq"]
-                        if ack_sequence in self.unacked_msgs:
-                            #add a check on this line for duplicate ACK concerns
-                            self.acked_in_window_msgs.add(ack_sequence)
-                            self.unacked_msgs.remove(ack_sequence)
-                        self.process_ack(ack_sequence) #duplicate ACK concerns.
-
-                        if self.left_window_bound in self.acked_in_window_msgs: #if this passes, window_shift needs to be done
-                            window_shift_length = len(self.get_longest_consecutive_from_min(self.acked_in_window_msgs)) #this gets us the amount we need to shift by
-                            for i in range(window_shift_length):
-                                self.acked_in_window_msgs.remove(self.left_window_bound + i) #remove the acked messages that are no longer in the window from the set of acked messages in the window
-                            self.left_window_bound += window_shift_length
-                            self.right_window_bound += window_shift_length
-                            
-                        
-
+                    self.process_ack(data)
+                
                 elif conn == sys.stdin: #ready from stdin the user input if it exists
-                    #while loop reads from stdin until we fill up the window.
-                    while current_seq <= self.right_window_bound:
-                        data = sys.stdin.read(DATA_SIZE)
-                        if len(data) == 0:
-                            self.log("All done!")
-                            sys.exit(0)
-                        self.send_msg(data, current_seq)
-                        self.unacked_msgs.add(current_seq)
+                    while current_seq <= self.right_window_bound:#while loop reads from stdin until we fill up the window.
+                        self.send_msg(current_seq)
                         current_seq += 1
 
         return
