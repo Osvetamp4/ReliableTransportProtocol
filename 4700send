@@ -1,5 +1,6 @@
 #!/usr/bin/env -S python3 -u
 
+import numbers
 import argparse, socket, time, json, select, struct, sys, math
 
 DATA_SIZE = 1375
@@ -14,9 +15,12 @@ class Sender:
         self.waiting = False
 
         self.window_size = 3
-        self.RTO = 0.5
-        self.cumulative_acks = 0
-        self.unacked_msgs = {}
+        self.left_window_bound = 0
+        self.right_window_bound = self.window_size - 1
+        
+        self.acked_in_window_msgs = set() #set of sequence numbers that have been acked by the receiver
+        self.unacked_msgs = set() #set of sequence numbers that have been sent but not yet acked by the receiver
+
 
         self.remote_host = None
         self.remote_port = None #remote host/port should be the same as host/port but we will update it when we get the first message back from the remote host to make sure we're talking to the same remote host/port
@@ -45,28 +49,76 @@ class Sender:
             self.log("Received message %s" % data)
             return json.loads(data.decode("utf-8"))
 
-    def run(self):
-        seq = 0
-        while True:
-            sockets = [self.socket, sys.stdin] if len(self.unacked_msgs) < self.window_size else [self.socket]
+    #determines if we can move the window forward by checking if the oldest unacked message has been acked. if it is then we say true
+    def can_window_move(self):
+        return self.left_window_bound not in self.unacked_msgs
+    
+    #starts at init and reads from stdin until we filled up the window.
+    def initial_window_fill_up(self):
+        pass
+    
+    def get_longest_consecutive_from_min(numbers):
+        if not numbers:
+            return []
+        sorted_uniques = sorted(list(set(numbers)))
+    
+        longest_seq = []
+        current_val = sorted_uniques[0]
+    
+        for num in sorted_uniques:
+            if num == current_val:
+                longest_seq.append(num)
+                current_val += 1
+            else:
+                break
+            
+        return longest_seq
 
+    def process_ack(self, ack_sequence):
+        pass
+    def send_msg(self, data, seq):
+        msg = { "type": "msg", "data": data, "seq": seq }
+        pass
+    
+    def run(self):
+        current_seq = 0
+        while True:
+            sockets = [self.socket, sys.stdin] if current_seq <= self.right_window_bound else [self.socket] #only read from sdtin IF window is not full
+
+
+           
             socks = select.select(sockets, [], [], 0.1)[0]
             for conn in socks:
                 if conn == self.socket:
                     data = self.recv(conn)
 
-                    if data:
-                        self.waiting = False
-                elif conn == sys.stdin:
-                    data = sys.stdin.read(DATA_SIZE)
-                    if len(data) == 0:
-                        self.log("All done!")
-                        sys.exit(0)
+                    if data and data["type"] == "ack":
+                        ack_sequence = data["seq"]
+                        if ack_sequence in self.unacked_msgs:
+                            #add a check on this line for duplicate ACK concerns
+                            self.acked_in_window_msgs.add(ack_sequence)
+                            self.unacked_msgs.remove(ack_sequence)
+                        self.process_ack(ack_sequence) #duplicate ACK concerns.
 
-                    msg = { "type": "msg", "data": data, "seq": seq }
-                    self.send(msg)
-                    self.waiting = True
-                    seq += 1
+                        if self.left_window_bound in self.acked_in_window_msgs: #if this passes, window_shift needs to be done
+                            window_shift_length = len(self.get_longest_consecutive_from_min(self.acked_in_window_msgs)) #this gets us the amount we need to shift by
+                            for i in range(window_shift_length):
+                                self.acked_in_window_msgs.remove(self.left_window_bound + i) #remove the acked messages that are no longer in the window from the set of acked messages in the window
+                            self.left_window_bound += window_shift_length
+                            self.right_window_bound += window_shift_length
+                            
+                        
+
+                elif conn == sys.stdin: #ready from stdin the user input if it exists
+                    #while loop reads from stdin until we fill up the window.
+                    while current_seq <= self.right_window_bound:
+                        data = sys.stdin.read(DATA_SIZE)
+                        if len(data) == 0:
+                            self.log("All done!")
+                            sys.exit(0)
+                        self.send_msg(data, current_seq)
+                        self.unacked_msgs.add(current_seq)
+                        current_seq += 1
 
         return
 
