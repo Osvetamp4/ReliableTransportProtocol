@@ -12,12 +12,11 @@ class Sender:
         self.log("Sender starting up using port %s" % self.port)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
-        self.waiting = False
 
         self.window_size = 3
+
         self.left_window_bound = 0
         self.right_window_bound = self.window_size - 1
-        
         self.acked_in_window_msgs = set() #set of sequence numbers that have been acked by the receiver
         self.unacked_msgs = set() #set of sequence numbers that have been sent but not yet acked by the receiver
 
@@ -53,9 +52,6 @@ class Sender:
     def can_window_move(self):
         return self.left_window_bound not in self.unacked_msgs
     
-    #starts at init and reads from stdin until we filled up the window.
-    def initial_window_fill_up(self):
-        pass
     
     def get_longest_consecutive_from_min(self,numbers):
         if not numbers:
