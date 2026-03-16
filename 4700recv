@@ -17,6 +17,7 @@ class Receiver:
 
         self.buffer_dictionary = dict() #dictionary of sequence number to data for out of order packets
         self.seq_buffer_pointer = -1 #pointer to next seq num that we wait for
+
     #obv this only works if we already recieved message and actually update the remote host/port fields
     def send(self, message):
         self.log("Sent message %s" % json.dumps(message))
@@ -54,7 +55,6 @@ class Receiver:
             print(self.buffer_dictionary[self.seq_buffer_pointer + 1],end='',flush=True)
             del self.buffer_dictionary[self.seq_buffer_pointer + 1]
             self.seq_buffer_pointer += 1
-
     
     def determine_adjacent(self,sack_block,seq_num):
         lower_bound = sack_block[0]

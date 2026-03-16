@@ -18,7 +18,8 @@ class Sender:
         self.left_window_bound = 0
         self.right_window_bound = self.window_size - 1
         self.acked_in_window_msgs = set() #set of sequence numbers that have been acked by the receiver
-        self.unacked_msgs = set() #set of sequence numbers that have been sent but not yet acked by the receiver
+        #self.unacked_msgs = set() #set of sequence numbers that have been sent but not yet acked by the receiver
+        self.unacked_msgs = dict() #dictionary of sequence numbers with strikes that have been sent but not yet acked by the receiver
 
 
         self.remote_host = None
@@ -48,11 +49,6 @@ class Sender:
             self.log("Received message %s" % data)
             return json.loads(data.decode("utf-8"))
 
-    #determines if we can move the window forward by checking if the oldest unacked message has been acked. if it is then we say true
-    def can_window_move(self):
-        return self.left_window_bound not in self.unacked_msgs
-    
-    
     def get_longest_consecutive_from_min(self,numbers):
         if not numbers:
             return []
@@ -76,7 +72,7 @@ class Sender:
             if ack_sequence in self.unacked_msgs: #if this passes, update the acked and unacked sets
                 #already guards against duplicates
                 self.acked_in_window_msgs.add(ack_sequence)
-                self.unacked_msgs.remove(ack_sequence)
+                del self.unacked_msgs[ack_sequence]
                             
 
             if self.left_window_bound in self.acked_in_window_msgs: #if this passes, window_shift needs to be done
@@ -94,7 +90,7 @@ class Sender:
             sys.exit(0)
         msg = { "type": "msg", "data": data, "seq": current_seq }
         self.send(msg)
-        self.unacked_msgs.add(current_seq)
+        self.unacked_msgs[current_seq] = 0 #initialize strikes for this message to 0
     
     def run(self):
         current_seq = 0
