@@ -14,6 +14,9 @@ class Receiver:
 
         self.cumulative_ack = -1 #highest sequence number that is the garunteed to have been recieved by reciever
         self.sack_blocks = [] #SACK block lower and upper bound pairs
+
+        self.buffer_dictionary = dict() #dictionary of sequence number to data for out of order packets
+        self.seq_buffer_pointer = -1 #pointer to next seq num that we wait for
     #obv this only works if we already recieved message and actually update the remote host/port fields
     def send(self, message):
         self.log("Sent message %s" % json.dumps(message))
@@ -40,6 +43,18 @@ class Receiver:
     def log(self, message):
         sys.stderr.write(message + "\n")
         sys.stderr.flush()
+    
+    def handle_msg_buffer(self,seq_num,data):
+        if abs(seq_num - self.seq_buffer_pointer) <= 1:
+            print(data,end='',flush=True)
+            self.seq_buffer_pointer += 1
+            return
+        self.buffer_dictionary[seq_num] = data
+        while self.seq_buffer_pointer + 1 in self.buffer_dictionary:
+            print(self.buffer_dictionary[self.seq_buffer_pointer + 1],end='',flush=True)
+            del self.buffer_dictionary[self.seq_buffer_pointer + 1]
+            self.seq_buffer_pointer += 1
+
     
     def determine_adjacent(self,sack_block,seq_num):
         lower_bound = sack_block[0]
@@ -117,8 +132,12 @@ class Receiver:
 
                 if msg:
                     # Print out the data to stdout
-                    print(msg["data"], end='', flush=True)
+                    #print(msg["data"], end='', flush=True)
                     seq_num = msg["seq"]
+                    data = msg["data"]
+
+                    self.handle_msg_buffer(data,seq_num)
+                    
                     self.sack_blocks = self.update_SACK_blocks(self.sack_blocks,seq_num)
                     self.sack_blocks,self.cumulative_ack = self.cum_ack_absorb(self.sack_blocks,self.cumulative_ack)
 

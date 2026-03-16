@@ -73,8 +73,8 @@ class Sender:
     def process_ack(self, data):
         if data and data["type"] == "ack":
             ack_sequence = data["seq"]
-            if ack_sequence in self.unacked_msgs: #already guards against duplicates
-                #add a check on this line for duplicate ACK concerns
+            if ack_sequence in self.unacked_msgs: #if this passes, update the acked and unacked sets
+                #already guards against duplicates
                 self.acked_in_window_msgs.add(ack_sequence)
                 self.unacked_msgs.remove(ack_sequence)
                             
