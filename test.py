@@ -15,6 +15,10 @@ def find_sack_block_avg(sack_block):
 
 
 def update_SACK_blocks(sack_blocks,seq_num):
+    if len(sack_blocks) == 0:
+        sack_blocks.append([seq_num,seq_num])
+        return sack_blocks
+
     avg_list = [find_sack_block_avg(sack_block) for sack_block in sack_blocks]
     #print(avg_list)
     lower_bound_index = 0
@@ -98,8 +102,9 @@ def process_ack_strike(strike_dictionary,ack_num):
         return True
     return False #don't resend it
 
-process_ack_strike(strike_dictionary,1)
-print(process_ack_strike(strike_dictionary,1))
-print(strike_dictionary)
-print(process_ack_strike(strike_dictionary,1))
-print(strike_dictionary)
+blist = []
+update_SACK_blocks(blist,1)
+print(blist)
+update_SACK_blocks(blist,2)
+update_SACK_blocks(blist,4)
+print(blist)
