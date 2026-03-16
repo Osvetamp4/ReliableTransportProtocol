@@ -83,5 +83,23 @@ def cum_ack_absorb(sack_blocks,cumulative_ack):
         cumulative_ack = upper_bound
         del sack_blocks[0]
     return sack_blocks,cumulative_ack
-blist = [[1,3],[5,7],[9,10]]
-print(cum_ack_absorb(blist,0))
+
+
+strike_dictionary = dict()
+strike_dictionary[1] = 0
+strike_dictionary[3] = 0
+#assumes that ack already has entry in dictionary
+def process_ack_strike(strike_dictionary,ack_num):
+    if ack_num not in strike_dictionary:
+        return False
+    strike_dictionary[ack_num] += 1
+    if strike_dictionary[ack_num] >= 3:
+        strike_dictionary[ack_num] = 0 #reset the strike count and resend it
+        return True
+    return False #don't resend it
+
+process_ack_strike(strike_dictionary,1)
+print(process_ack_strike(strike_dictionary,1))
+print(strike_dictionary)
+print(process_ack_strike(strike_dictionary,1))
+print(strike_dictionary)
