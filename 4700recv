@@ -12,6 +12,8 @@ class Receiver:
         self.remote_host = None
         self.remote_port = None
 
+        self.cumulative_ack = -1 #highest sequence number that is the garunteed to have been recieved by reciever
+
     #obv this only works if we already recieved message and actually update the remote host/port fields
     def send(self, message):
         self.log("Sent message %s" % json.dumps(message))
