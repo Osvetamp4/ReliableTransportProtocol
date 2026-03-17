@@ -38,7 +38,8 @@ class Receiver:
             self.log("Error:  Received response from unexpected remote; ignoring")
             return None
         else:
-            self.log("Received message %s" % data.decode("utf-8"))
+            self.log("Received message %s" % json.loads(data.decode("utf-8"))["data"][:25])
+            #self.log("Received message %s" % json.dumps(data))
             return json.loads(data.decode("utf-8"))
 
     def log(self, message):
@@ -115,13 +116,21 @@ class Receiver:
         return sack_blocks
     
     def cum_ack_absorb(self,sack_blocks,cumulative_ack):
-        first_sack_block = sack_blocks[0]
-        lower_bound = first_sack_block[0]
-        upper_bound = first_sack_block[1]
+        if sack_blocks:
+            first_sack_block = sack_blocks[0]
+            lower_bound = first_sack_block[0]
+            upper_bound = first_sack_block[1]
+            old_cumulative_ack = cumulative_ack
 
-        if abs(lower_bound - cumulative_ack) <= 1:
-            cumulative_ack = upper_bound
-            del sack_blocks[0]
+            if abs(lower_bound - cumulative_ack) <= 1:
+                cumulative_ack = upper_bound
+                del sack_blocks[0]
+            while old_cumulative_ack < cumulative_ack: #go from old cumulative ack to the new cumulative ack to print out all sequence data left of the new cumulative ack.
+                old_cumulative_ack += 1
+                print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
+                del self.buffer_dictionary[old_cumulative_ack]
+            
+        
         return sack_blocks,cumulative_ack
 
     def run(self):
@@ -136,9 +145,9 @@ class Receiver:
                     seq_num = msg["seq"]
                     data = msg["data"]
 
-                    self.handle_msg_buffer(data,seq_num)
+                    self.buffer_dictionary[seq_num] = data #immune to duplicates and out of order
                     
-                    self.sack_blocks = self.update_SACK_blocks(self.sack_blocks,seq_num)
+                    self.sack_blocks = self.update_SACK_blocks(self.sack_blocks,seq_num) #maybe make it regenerate SACK blocks from buffer dictionary every time???
                     self.sack_blocks,self.cumulative_ack = self.cum_ack_absorb(self.sack_blocks,self.cumulative_ack)
 
                     # Always send back an ack

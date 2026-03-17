@@ -13,14 +13,24 @@ class Sender:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
 
-        self.window_size = 3
+        self.window_size = 2
 
         self.left_window_bound = 0
         self.right_window_bound = self.window_size - 1
-        self.acked_in_window_msgs = set() #set of sequence numbers that have been acked by the receiver
+        self.acked_in_window_msgs = set() #set of sequence numbers that have been acked by the receiver, but are still in the current window
         #self.unacked_msgs = set() #set of sequence numbers that have been sent but not yet acked by the receiver
         self.unacked_msgs = dict() #dictionary of sequence numbers with strikes that have been sent but not yet acked by the receiver
 
+        self.resend_queue = [] #queue of sequence numbers that need to be resent
+        self.timeout_duration = 3.5
+        self.oldest_packet_timestamp = None
+
+        self.missing_ack_sequence_list = []
+        self.latest_sack_blocks = None
+
+        self.shutdown_phase = False
+        self.recv_cumulative_ack = -2
+        self.latest_sequence_sent = -1
 
         self.remote_host = None
         self.remote_port = None #remote host/port should be the same as host/port but we will update it when we get the first message back from the remote host to make sure we're talking to the same remote host/port
@@ -30,7 +40,8 @@ class Sender:
         sys.stderr.flush()
 
     def send(self, message):
-        self.log("Sending message '%s'" % json.dumps(message))
+        new_message = message["data"][:25]
+        self.log("Sending message '%s'" % json.dumps(new_message))
         self.socket.sendto(json.dumps(message).encode("utf-8"), (self.host, self.port))
 
     def recv(self, socket):
@@ -65,46 +76,133 @@ class Sender:
                 break
             
         return longest_seq
+    
+    def find_missing_seq(self,sack_blocks,cumulative_ack):
+        missing_acks = []
+        ack_pointer = cumulative_ack
+        for sack_block in sack_blocks:
+            lower_bound = sack_block[0]
+            upper_bound = sack_block[1]
+            missing_acks.extend(list(range(ack_pointer + 1,lower_bound)))
+            ack_pointer = upper_bound
+        return missing_acks
 
+    #assumes that ack already has entry in dictionary
+    #given an ack_num, increment strike count in unacked_msgs dictionary and return true if we need to resend the message(reset count if we do)
+    def process_ack_strike(self, ack_num):
+        if ack_num not in self.unacked_msgs:
+            return False
+        self.unacked_msgs[ack_num][0] += 1
+        if self.unacked_msgs[ack_num][0] >= 3:
+            self.unacked_msgs[ack_num][0] = 0 #reset the strike count and resend it
+            self.resend_queue.append(ack_num) #add to resend queue
+            self.log("Ack %d strike count: %d" % (ack_num, self.unacked_msgs[ack_num][0]))
+            return True
+        self.log("Ack %d strike count: %d" % (ack_num, self.unacked_msgs[ack_num][0]))
+        return False #don't resend it
+
+    
     def process_ack(self, data):
-        if data and data["type"] == "ack":
-            ack_sequence = data["seq"]
-            if ack_sequence in self.unacked_msgs: #if this passes, update the acked and unacked sets
-                #already guards against duplicates
-                self.acked_in_window_msgs.add(ack_sequence)
-                del self.unacked_msgs[ack_sequence]
-                            
-
-            if self.left_window_bound in self.acked_in_window_msgs: #if this passes, window_shift needs to be done
-                window_shift_length = len(self.get_longest_consecutive_from_min(self.acked_in_window_msgs)) #this gets us the amount we need to shift by
-                for i in range(window_shift_length):
-                    self.acked_in_window_msgs.remove(self.left_window_bound + i) #remove the acked messages that are no longer in the window from the set of acked messages in the window
-                self.left_window_bound += window_shift_length
-                self.right_window_bound += window_shift_length
+            if not data or data["type"] != "ack":
+                return
+            
+            cum_ack = data["cum_ack"]
+            sack_blocks = data["sack_blocks"]
+            self.recv_cumulative_ack = cum_ack
+            
+            self.missing_ack_sequence_list = self.find_missing_seq(sack_blocks, cum_ack) #update the missing ack sequence list based on the new sack blocks and cumulative ack
 
 
-    def send_msg(self, current_seq):
-        data = sys.stdin.read(DATA_SIZE)
+            for block in sack_blocks:
+                for seq in range(block[0], block[1] + 1):
+                    self.acked_in_window_msgs.add(seq)
+                    
+            #for loop to clean up unacked msgs
+            for seq in list(self.unacked_msgs.keys()):
+                if seq <= cum_ack: #if seq num to left of cumulative ack, then we can safely delete it from unacked msgs and acked in window
+                    del self.unacked_msgs[seq]
+                    if seq in self.acked_in_window_msgs:
+                        self.acked_in_window_msgs.remove(seq)
+                else:
+                    
+                    if seq not in self.missing_ack_sequence_list and seq <= cum_ack: #if sequence not in missing ack list, then it is acked but it is right of cumulative ack
+                        self.log("hey is this running")
+                        self.acked_in_window_msgs.add(seq)
+                        if seq in self.unacked_msgs:
+                            del self.unacked_msgs[seq]
+                    else: #sequence is in missing ack list, so we need to increment strike count
+                        self.process_ack_strike(seq)
+
+            #only slide on the cumlative_ack
+            #This if statement handles window sliding
+            if cum_ack + 1 > self.left_window_bound:
+                self.left_window_bound = cum_ack + 1
+                while self.left_window_bound in self.acked_in_window_msgs:
+                    self.acked_in_window_msgs.remove(self.left_window_bound)
+                    self.left_window_bound += 1
+                #directly fix the right window bound entirely on left window bound instead of seperate calc
+                self.right_window_bound = self.left_window_bound + self.window_size - 1
+
+            #stop the timer if no more unacked msgs
+            if not self.unacked_msgs:
+                self.oldest_packet_timestamp = None
+            else:
+                self.oldest_packet_timestamp = time.time()
+            
+
+
+    def send_msg(self, current_seq, data=None):
+        if data is not None:
+            pass
+        else:
+            data = sys.stdin.read(DATA_SIZE)
         if len(data) == 0:
-            self.log("All done!")
-            sys.exit(0)
+            #no more data to read
+            self.shutdown_phase = True
+            self.log("Activating shutdown phase")
+            return
         msg = { "type": "msg", "data": data, "seq": current_seq }
         self.send(msg)
-        self.unacked_msgs[current_seq] = 0 #initialize strikes for this message to 0
+        self.unacked_msgs[current_seq] = [0,data,time.time()] #initialize strikes for this message to 0
+        self.latest_sequence_sent = current_seq
+
+        if self.oldest_packet_timestamp is None:
+            self.oldest_packet_timestamp = time.time()
+    
+    def check_timeout(self):
+        if self.oldest_packet_timestamp is not None and time.time() - self.oldest_packet_timestamp >= self.timeout_duration:
+            if self.left_window_bound in self.unacked_msgs:
+                self.resend_queue.append(self.left_window_bound)
+                print("timeout for sequence number %s" % self.left_window_bound)
+            for seq_num in self.missing_ack_sequence_list:
+                print("timeout for sequence number %s" % seq_num)
+                self.resend_queue.append(seq_num)
+                self.unacked_msgs[seq_num][0] = 0 #reset strike count for all unacked messages that are being resent
+            self.oldest_packet_timestamp = time.time() #reset the oldest packet timestamp after adding all unacked messages to the resend queue
     
     def run(self):
         current_seq = 0
         while True:
+            if self.shutdown_phase and not self.unacked_msgs and self.recv_cumulative_ack == self.latest_sequence_sent: #if we are in shutdown phase and have no more unacked msgs then we can exit
+                sys.exit(0)
+            self.check_timeout()
             sockets = [self.socket, sys.stdin] if current_seq <= self.right_window_bound else [self.socket] #only read from sdtin IF window is not full
+            if self.shutdown_phase:
+                sockets = [self.socket] #if we're in shutdown phase don't read from stdin at all
             socks = select.select(sockets, [], [], 0.1)[0]
 
+            for sequence in self.resend_queue: #resend all messages in the resend queue before reading new input
+                self.send_msg(sequence,self.unacked_msgs[sequence][1])
+            self.resend_queue = []
             for conn in socks:
                 if conn == self.socket:
                     data = self.recv(conn)
+                    self.log("Processing ack with sack blocks %s and cumulative ack %s" % (data["sack_blocks"],data["cum_ack"]))
                     self.process_ack(data)
                 
                 elif conn == sys.stdin: #ready from stdin the user input if it exists
-                    while current_seq <= self.right_window_bound:#while loop reads from stdin until we fill up the window.
+
+                    while current_seq <= self.right_window_bound and self.shutdown_phase == False:#while loop reads from stdin until we fill up the window.
                         self.send_msg(current_seq)
                         current_seq += 1
 
