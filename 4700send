@@ -13,7 +13,7 @@ class Sender:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
 
-        self.window_size = 2
+        self.window_size = 4
 
         self.left_window_bound = 0
         self.right_window_bound = self.window_size - 1
@@ -22,7 +22,7 @@ class Sender:
         self.unacked_msgs = dict() #dictionary of sequence numbers with strikes that have been sent but not yet acked by the receiver
 
         self.resend_queue = [] #queue of sequence numbers that need to be resent
-        self.timeout_duration = 3.5
+        self.timeout_duration = 1.5
         self.oldest_packet_timestamp = None
 
         self.missing_ack_sequence_list = []
@@ -246,16 +246,19 @@ class Sender:
             #This handles RTO timing
             if not self.unacked_msgs:
                 self.oldest_packet_timestamp = None
-            else:
+            elif is_cumulative_ack_changed:
+                # The 'Mainland' moved, so the 'oldest' packet changed. 
+                # Restart the timer for the new oldest packet.
                 self.oldest_packet_timestamp = time.time()
-            
 
 
-    def send_msg(self, current_seq, data=None):
+    '''def send_msg(self, current_seq, data=None):
         if data is not None:
             pass
         else:
             data = sys.stdin.read(DATA_SIZE)
+            self.unacked_msgs[current_seq] = [0, data, time.time()]
+            self.latest_sequence_sent = current_seq
         if len(data) == 0:
             #no more data to read
             self.shutdown_phase = True
@@ -263,27 +266,56 @@ class Sender:
             return
         msg = { "type": "msg", "data": data, "seq": current_seq }
         self.send(msg)
-        self.unacked_msgs[current_seq] = [0,data,time.time()] #initialize strikes for this message to 0
-        self.latest_sequence_sent = current_seq
+        
 
         if self.oldest_packet_timestamp is None:
-            self.oldest_packet_timestamp = time.time()
+            self.oldest_packet_timestamp = time.time()'''
+    def send_msg(self, current_seq, data=None):
+            # Case A: Retransmission (data is already provided)
+            if data is not None:
+                msg = { "type": "msg", "data": data, "seq": current_seq }
+                self.send(msg)
+            
+            # Case B: First-time send (must read from stdin)
+            else:
+                new_data = sys.stdin.read(DATA_SIZE)
+                if len(new_data) == 0:
+                    self.shutdown_phase = True
+                    # self.log("End of file reached.") # Optional log
+                    return # STOP HERE. Do not update latest_sequence_sent.
+                
+                # Only save and update goalpost if we actually got data!
+                self.unacked_msgs[current_seq] = [0, new_data, time.time()]
+                self.latest_sequence_sent = current_seq
+                
+                msg = { "type": "msg", "data": new_data, "seq": current_seq }
+                self.send(msg)
+
+            # Start timer if this is the first packet in flight
+            if self.oldest_packet_timestamp is None:
+                self.oldest_packet_timestamp = time.time()
+    
+
     
     def check_timeout(self):
-        if self.oldest_packet_timestamp is not None and time.time() - self.oldest_packet_timestamp >= self.timeout_duration:
-            if self.left_window_bound in self.unacked_msgs:
-                self.resend_queue.append(self.left_window_bound)
-                print("timeout for sequence number %s" % self.left_window_bound)
-            for seq_num in self.missing_ack_sequence_list:
-                print("timeout for sequence number %s" % seq_num)
-                self.resend_queue.append(seq_num)
-                self.unacked_msgs[seq_num][0] = 0 #reset strike count for all unacked messages that are being resent
-            self.oldest_packet_timestamp = time.time() #reset the oldest packet timestamp after adding all unacked messages to the resend queue
+        if self.oldest_packet_timestamp is None: return
+        
+        if time.time() - self.oldest_packet_timestamp >= self.timeout_duration:
+            target = self.cumulative_ack + 1
+            
+            # Only resend if the target is a real packet we actually sent!
+            if target <= self.latest_sequence_sent and target in self.unacked_msgs:
+                self.log(f"TIMEOUT: Resending actual missing packet {target}")
+                self.resend_queue.append(target)
+                self.unacked_msgs[target][0] = 0 
+                
+            self.oldest_packet_timestamp = time.time()
+
     
     def run(self):
         current_seq = 0
-        while True:
-            if self.shutdown_phase and not self.unacked_msgs: # and self.recv_cumulative_ack == self.latest_sequence_sent: #if we are in shutdown phase and have no more unacked msgs then we can exit
+        while True:# if self.shutdown_phase and not self.unacked_msgs:
+            if self.shutdown_phase and self.cumulative_ack >= self.latest_sequence_sent: # and self.recv_cumulative_ack == self.latest_sequence_sent: #if we are in shutdown phase and have no more unacked msgs then we can exit
                 sys.exit(0)
             self.check_timeout()
             sockets = [self.socket, sys.stdin] if current_seq <= self.right_window_bound else [self.socket] #only read from sdtin IF window is not full
