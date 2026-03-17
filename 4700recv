@@ -46,16 +46,6 @@ class Receiver:
         sys.stderr.write(message + "\n")
         sys.stderr.flush()
     
-    def handle_msg_buffer(self,seq_num,data):
-        if abs(seq_num - self.seq_buffer_pointer) <= 1:
-            print(data,end='',flush=True)
-            self.seq_buffer_pointer += 1
-            return
-        self.buffer_dictionary[seq_num] = data
-        while self.seq_buffer_pointer + 1 in self.buffer_dictionary:
-            print(self.buffer_dictionary[self.seq_buffer_pointer + 1],end='',flush=True)
-            del self.buffer_dictionary[self.seq_buffer_pointer + 1]
-            self.seq_buffer_pointer += 1
     
     def determine_adjacent(self,sack_block,seq_num):
         lower_bound = sack_block[0]

@@ -27,6 +27,7 @@ class Sender:
 
         self.missing_ack_sequence_list = []
         self.latest_sack_blocks = None
+        self.cumulative_ack = -1
 
         self.shutdown_phase = False
         self.recv_cumulative_ack = -2
@@ -101,31 +102,100 @@ class Sender:
         self.log("Ack %d strike count: %d" % (ack_num, self.unacked_msgs[ack_num][0]))
         return False #don't resend it
 
-    
+    def merge_sack_blocks(self,sack_block1,sack_block2):
+            if sack_block1[0] <= sack_block2[0] and sack_block1[1] >= sack_block2[0] - 1: #if sack block 1 is to the left of sack block 2 and they are adjacent or overlapping, merge them
+                return [min(sack_block1[0],sack_block2[0]),max(sack_block1[1],sack_block2[1])]
+            elif sack_block2[0] <= sack_block1[0] and sack_block2[1] >= sack_block1[0] - 1: #if sack block 2 is to the left of sack block 1 and they are adjacent or overlapping, merge them
+                return [min(sack_block1[0],sack_block2[0]),max(sack_block1[1],sack_block2[1])]
+            else:
+                return None
+
+    def merge_sack_block_lists(self,sack_blocks1,sack_blocks2):
+            if sack_blocks1 is None: sack_blocks1 = []
+            if sack_blocks2 is None: sack_blocks2 = []
+            merged_sack_blocks = []
+            i = 0
+            j = 0
+            while i < len(sack_blocks1) and j < len(sack_blocks2):
+                merged_block = self.merge_sack_blocks(sack_blocks1[i],sack_blocks2[j])
+                if merged_block:
+                    merged_sack_blocks.append(merged_block)
+                    i += 1
+                    j += 1
+                elif sack_blocks1[i][0] < sack_blocks2[j][0]:
+                    merged_sack_blocks.append(sack_blocks1[i])
+                    i += 1
+                else:
+                    merged_sack_blocks.append(sack_blocks2[j])
+                    j += 1
+            while i < len(sack_blocks1):
+                merged_sack_blocks.append(sack_blocks1[i])
+                i += 1
+            while j < len(sack_blocks2):
+                merged_sack_blocks.append(sack_blocks2[j])
+                j += 1
+            return merged_sack_blocks
+
+    def absorb_sacks(self, cumulative_ack, sack_blocks):
+        """
+        Consolidates SACK blocks into the cumulative_ack if they touch or overlap.
+        Returns the new cumulative_ack and the remaining (unabsorbed) sack_blocks.
+        """
+        if not sack_blocks:
+            return cumulative_ack, []
+
+        # Ensure blocks are sorted by start sequence
+        sack_blocks.sort()
+        
+        # Merge overlapping or adjacent SACK blocks first
+        merged = []
+        curr_start, curr_end = sack_blocks[0]
+        for next_start, next_end in sack_blocks[1:]:
+            if next_start <= curr_end + 1:
+                curr_end = max(curr_end, next_end)
+            else:
+                merged.append([curr_start, curr_end])
+                curr_start, curr_end = next_start, next_end
+        merged.append([curr_start, curr_end])
+
+        # Absorb merged blocks into the mainland
+        final_sacks = []
+        new_cum_ack = cumulative_ack
+        
+        for start, end in merged:
+            # If block touches or is behind the mainland, it's absorbed
+            if start <= new_cum_ack + 1:
+                new_cum_ack = max(new_cum_ack, end)
+            else:
+                # It's still an island
+                final_sacks.append([start, end])
+
+        return new_cum_ack, final_sacks
+
     def process_ack(self, data):
             if not data or data["type"] != "ack":
                 return
             
-            cum_ack = data["cum_ack"]
+            new_cum_ack = data["cum_ack"]
+            self.cumulative_ack = max(self.cumulative_ack, new_cum_ack) #update to find highest cumulative ack seen so far
             sack_blocks = data["sack_blocks"]
-            self.recv_cumulative_ack = cum_ack
+            #self.recv_cumulative_ack = new_cum_ack
             
-            self.missing_ack_sequence_list = self.find_missing_seq(sack_blocks, cum_ack) #update the missing ack sequence list based on the new sack blocks and cumulative ack
-
-
-            for block in sack_blocks:
-                for seq in range(block[0], block[1] + 1):
-                    self.acked_in_window_msgs.add(seq)
+            
+            self.missing_ack_sequence_list = self.find_missing_seq(sack_blocks,new_cum_ack)
+            
+            self.latest_sack_blocks = self.merge_sack_block_lists(self.latest_sack_blocks,sack_blocks)
+            self.cumulative_ack, self.latest_sack_blocks = self.absorb_sacks(self.cumulative_ack,self.latest_sack_blocks)
                     
             #for loop to clean up unacked msgs
             for seq in list(self.unacked_msgs.keys()):
-                if seq <= cum_ack: #if seq num to left of cumulative ack, then we can safely delete it from unacked msgs and acked in window
+                if seq <= self.cumulative_ack: #if seq num to left of cumulative ack, then we can safely delete it from unacked msgs and acked in window
                     del self.unacked_msgs[seq]
                     if seq in self.acked_in_window_msgs:
                         self.acked_in_window_msgs.remove(seq)
                 else:
                     
-                    if seq not in self.missing_ack_sequence_list and seq <= cum_ack: #if sequence not in missing ack list, then it is acked but it is right of cumulative ack
+                    if seq not in self.missing_ack_sequence_list and seq <= self.cumulative_ack: #if sequence not in missing ack list, then it is acked but it is right of cumulative ack
                         self.log("hey is this running")
                         self.acked_in_window_msgs.add(seq)
                         if seq in self.unacked_msgs:
@@ -135,8 +205,8 @@ class Sender:
 
             #only slide on the cumlative_ack
             #This if statement handles window sliding
-            if cum_ack + 1 > self.left_window_bound:
-                self.left_window_bound = cum_ack + 1
+            if self.cumulative_ack + 1 > self.left_window_bound:
+                self.left_window_bound = self.cumulative_ack + 1
                 while self.left_window_bound in self.acked_in_window_msgs:
                     self.acked_in_window_msgs.remove(self.left_window_bound)
                     self.left_window_bound += 1
@@ -183,7 +253,7 @@ class Sender:
     def run(self):
         current_seq = 0
         while True:
-            if self.shutdown_phase and not self.unacked_msgs and self.recv_cumulative_ack == self.latest_sequence_sent: #if we are in shutdown phase and have no more unacked msgs then we can exit
+            if self.shutdown_phase and not self.unacked_msgs: # and self.recv_cumulative_ack == self.latest_sequence_sent: #if we are in shutdown phase and have no more unacked msgs then we can exit
                 sys.exit(0)
             self.check_timeout()
             sockets = [self.socket, sys.stdin] if current_seq <= self.right_window_bound else [self.socket] #only read from sdtin IF window is not full
