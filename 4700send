@@ -172,39 +172,69 @@ class Sender:
 
         return new_cum_ack, final_sacks
 
+    def determine_seq_in_sack_block(self,sack_block,seq_num):
+        if sack_block[0] <= seq_num <= sack_block[1]:
+            return True
+        return False
+    
+    #given a sack block list, determine if seq num is in any of the sack blocks return true if it is
+    def if_seq_in_sack_blocks(self,sack_blocks,seq_num):
+        for sack_block in sack_blocks:
+            if self.determine_seq_in_sack_block(sack_block,seq_num):
+                return True
+        return False
+    
+    def is_seq_hole(self,sack_blocks,seq_num):
+        for sack_block in sack_blocks:
+            if sack_block[0] > seq_num:
+                return True
+        return False
+    
+    def is_sack_block_list_changed(self,sack_blocks1,sack_blocks2):
+        if sack_blocks1 is None: sack_blocks1 = []
+        if sack_blocks2 is None: sack_blocks2 = []
+        if len(sack_blocks1) != len(sack_blocks2):
+            return True
+        for i in range(len(sack_blocks1)):
+            if sack_blocks1[i][0] != sack_blocks2[i][0] or sack_blocks1[i][1] != sack_blocks2[i][1]:
+                return True
+        return False
+
     def process_ack(self, data):
             if not data or data["type"] != "ack":
                 return
             
             new_cum_ack = data["cum_ack"]
+            old_cumulative_ack = self.cumulative_ack
             self.cumulative_ack = max(self.cumulative_ack, new_cum_ack) #update to find highest cumulative ack seen so far
+            is_cumulative_ack_changed = False
+            if self.cumulative_ack != old_cumulative_ack:
+                is_cumulative_ack_changed = True
             sack_blocks = data["sack_blocks"]
             #self.recv_cumulative_ack = new_cum_ack
             
             
-            self.missing_ack_sequence_list = self.find_missing_seq(sack_blocks,new_cum_ack)
-            
-            self.latest_sack_blocks = self.merge_sack_block_lists(self.latest_sack_blocks,sack_blocks)
+            #self.missing_ack_sequence_list = self.find_missing_seq(sack_blocks,new_cum_ack) #FIX THIS LATER
+            new_sack_blocks_temporary = self.merge_sack_block_lists(self.latest_sack_blocks,sack_blocks)
+            is_sack_block_list_changed = self.is_sack_block_list_changed(self.latest_sack_blocks,new_sack_blocks_temporary)
+            self.latest_sack_blocks = new_sack_blocks_temporary
             self.cumulative_ack, self.latest_sack_blocks = self.absorb_sacks(self.cumulative_ack,self.latest_sack_blocks)
                     
-            #for loop to clean up unacked msgs
+            #Handles updating unacked_msgs, acked_in_window_msgs, and adding strikes to unacked messages that are holes
             for seq in list(self.unacked_msgs.keys()):
                 if seq <= self.cumulative_ack: #if seq num to left of cumulative ack, then we can safely delete it from unacked msgs and acked in window
                     del self.unacked_msgs[seq]
                     if seq in self.acked_in_window_msgs:
                         self.acked_in_window_msgs.remove(seq)
-                else:
-                    
-                    if seq not in self.missing_ack_sequence_list and seq <= self.cumulative_ack: #if sequence not in missing ack list, then it is acked but it is right of cumulative ack
-                        self.log("hey is this running")
+                else: #if seq num to right of cumulative ack,
+                    if self.if_seq_in_sack_blocks(self.latest_sack_blocks,seq):
+                        del self.unacked_msgs[seq]
                         self.acked_in_window_msgs.add(seq)
-                        if seq in self.unacked_msgs:
-                            del self.unacked_msgs[seq]
-                    else: #sequence is in missing ack list, so we need to increment strike count
-                        self.process_ack_strike(seq)
+                    else:
+                        if self.is_seq_hole(self.latest_sack_blocks,seq) and (is_cumulative_ack_changed or is_sack_block_list_changed):
+                            self.process_ack_strike(seq)
 
-            #only slide on the cumlative_ack
-            #This if statement handles window sliding
+            #HANDLES WINDOW SLIDING
             if self.cumulative_ack + 1 > self.left_window_bound:
                 self.left_window_bound = self.cumulative_ack + 1
                 while self.left_window_bound in self.acked_in_window_msgs:
@@ -213,7 +243,7 @@ class Sender:
                 #directly fix the right window bound entirely on left window bound instead of seperate calc
                 self.right_window_bound = self.left_window_bound + self.window_size - 1
 
-            #stop the timer if no more unacked msgs
+            #This handles RTO timing
             if not self.unacked_msgs:
                 self.oldest_packet_timestamp = None
             else:
