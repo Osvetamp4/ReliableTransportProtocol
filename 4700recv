@@ -131,7 +131,7 @@ class Receiver:
                 msg = self.recv(conn)
 
                 if msg:
-                    # Print out the data to stdout
+                    # Print out the data to stdout in order
                     #print(msg["data"], end='', flush=True)
                     seq_num = msg["seq"]
                     data = msg["data"]
