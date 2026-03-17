@@ -105,8 +105,9 @@ class Receiver:
             sack_blocks[upper_bound_index][0] -= 1
         return sack_blocks
     
-    def cum_ack_absorb(self,sack_blocks,cumulative_ack):
+    '''def cum_ack_absorb(self,sack_blocks,cumulative_ack):
         if sack_blocks:
+            
             first_sack_block = sack_blocks[0]
             lower_bound = first_sack_block[0]
             upper_bound = first_sack_block[1]
@@ -119,6 +120,24 @@ class Receiver:
                 old_cumulative_ack += 1
                 print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
                 del self.buffer_dictionary[old_cumulative_ack]
+            
+        
+        return sack_blocks,cumulative_ack'''
+
+    def cum_ack_absorb(self,sack_blocks,cumulative_ack):
+        if sack_blocks:
+            for sack_block in sack_blocks:
+                lower_bound = sack_block[0]
+                upper_bound = sack_block[1]
+                old_cumulative_ack = cumulative_ack
+
+                if abs(lower_bound - cumulative_ack) <= 1:
+                    cumulative_ack = upper_bound
+                    sack_blocks.remove(sack_block)
+                while old_cumulative_ack < cumulative_ack: #go from old cumulative ack to the new cumulative ack to print out all sequence data left of the new cumulative ack.
+                    old_cumulative_ack += 1
+                    print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
+                    del self.buffer_dictionary[old_cumulative_ack]
             
         
         return sack_blocks,cumulative_ack

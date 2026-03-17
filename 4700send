@@ -228,10 +228,10 @@ class Sender:
                         self.acked_in_window_msgs.remove(seq)
                 else: #if seq num to right of cumulative ack,
                     if self.if_seq_in_sack_blocks(self.latest_sack_blocks,seq):
-                        del self.unacked_msgs[seq]
+                        #del self.unacked_msgs[seq]
                         self.acked_in_window_msgs.add(seq)
                     else:
-                        if self.is_seq_hole(self.latest_sack_blocks,seq) and (is_cumulative_ack_changed or is_sack_block_list_changed):
+                        if self.is_seq_hole(self.latest_sack_blocks,seq) and (is_cumulative_ack_changed or is_sack_block_list_changed): # 
                             self.process_ack_strike(seq)
 
             #HANDLES WINDOW SLIDING
@@ -251,51 +251,51 @@ class Sender:
                 # Restart the timer for the new oldest packet.
                 self.oldest_packet_timestamp = time.time()
 
+    # def send_msg(self, current_seq, data=None):
+    #         # Case A: Retransmission (data is already provided)
+    #         if data is not None:
+    #             msg = { "type": "msg", "data": data, "seq": current_seq }
+    #             self.send(msg)
+            
+    #         # Case B: First-time send (must read from stdin)
+    #         else:
+    #             new_data = sys.stdin.read(DATA_SIZE)
+    #             if len(new_data) == 0:
+    #                 self.shutdown_phase = True
+    #                 # self.log("End of file reached.") # Optional log
+    #                 return # STOP HERE. Do not update latest_sequence_sent.
+                
+    #             # Only save and update goalpost if we actually got data!
+    #             self.unacked_msgs[current_seq] = [0, new_data, time.time()]
+    #             self.latest_sequence_sent = current_seq
+                
+    #             msg = { "type": "msg", "data": new_data, "seq": current_seq }
+    #             self.send(msg)
 
-    '''def send_msg(self, current_seq, data=None):
-        if data is not None:
-            pass
-        else:
-            data = sys.stdin.read(DATA_SIZE)
-            self.unacked_msgs[current_seq] = [0, data, time.time()]
+    #         # Start timer if this is the first packet in flight
+    #         if self.oldest_packet_timestamp is None:
+    #             self.oldest_packet_timestamp = time.time()
+    
+    def send_msg(self, current_seq, data=None):
+        if data is None: # This is a first-time send attempt
+            new_data = sys.stdin.read(DATA_SIZE)
+            
+            if len(new_data) == 0:
+                # We reached the real end of the file.
+                self.shutdown_phase = True
+                return # <--- CRITICAL: Exit now so latest_sequence_sent stays at 14
+            
+            # ONLY update the high-water mark if we actually read real data
+            self.unacked_msgs[current_seq] = [0, new_data, time.time()]
             self.latest_sequence_sent = current_seq
-        if len(data) == 0:
-            #no more data to read
-            self.shutdown_phase = True
-            self.log("Activating shutdown phase")
-            return
+            data = new_data # Use this for the physical send below
+
+        # Physical Send (Runs for both new data and retransmissions)
         msg = { "type": "msg", "data": data, "seq": current_seq }
         self.send(msg)
-        
 
         if self.oldest_packet_timestamp is None:
-            self.oldest_packet_timestamp = time.time()'''
-    def send_msg(self, current_seq, data=None):
-            # Case A: Retransmission (data is already provided)
-            if data is not None:
-                msg = { "type": "msg", "data": data, "seq": current_seq }
-                self.send(msg)
-            
-            # Case B: First-time send (must read from stdin)
-            else:
-                new_data = sys.stdin.read(DATA_SIZE)
-                if len(new_data) == 0:
-                    self.shutdown_phase = True
-                    # self.log("End of file reached.") # Optional log
-                    return # STOP HERE. Do not update latest_sequence_sent.
-                
-                # Only save and update goalpost if we actually got data!
-                self.unacked_msgs[current_seq] = [0, new_data, time.time()]
-                self.latest_sequence_sent = current_seq
-                
-                msg = { "type": "msg", "data": new_data, "seq": current_seq }
-                self.send(msg)
-
-            # Start timer if this is the first packet in flight
-            if self.oldest_packet_timestamp is None:
-                self.oldest_packet_timestamp = time.time()
-    
-
+            self.oldest_packet_timestamp = time.time()
     
     def check_timeout(self):
         if self.oldest_packet_timestamp is None: return
@@ -316,6 +316,7 @@ class Sender:
         current_seq = 0
         while True:# if self.shutdown_phase and not self.unacked_msgs:
             if self.shutdown_phase and self.cumulative_ack >= self.latest_sequence_sent: # and self.recv_cumulative_ack == self.latest_sequence_sent: #if we are in shutdown phase and have no more unacked msgs then we can exit
+                time.sleep(0.2)
                 sys.exit(0)
             self.check_timeout()
             sockets = [self.socket, sys.stdin] if current_seq <= self.right_window_bound else [self.socket] #only read from sdtin IF window is not full
