@@ -1,110 +1,75 @@
-def determine_adjacent(sack_block,seq_num):
-    lower_bound = sack_block[0]
-    upper_bound = sack_block[1]
-    if lower_bound - 1 == seq_num:
-        return "lower"
-    elif upper_bound + 1 == seq_num:
-        return "upper"
-    else:
-        return "none"
-
-def find_sack_block_avg(sack_block):
-    lower_bound = sack_block[0]
-    upper_bound = sack_block[1]
-    return (lower_bound + upper_bound) / 2
-
-
-def update_SACK_blocks(sack_blocks,seq_num):
-    if len(sack_blocks) == 0:
-        sack_blocks.append([seq_num,seq_num])
-        return sack_blocks
-
-    avg_list = [find_sack_block_avg(sack_block) for sack_block in sack_blocks]
-    #print(avg_list)
-    lower_bound_index = 0
-    upper_bound_index = len(sack_blocks) - 1
-    while upper_bound_index - lower_bound_index > 1:
-        middle_index = (lower_bound_index + upper_bound_index) // 2
-        if avg_list[middle_index] < seq_num:
-            lower_bound_index = middle_index
+def merge_sack_blocks(sack_block1,sack_block2):
+        if sack_block1[0] <= sack_block2[0] and sack_block1[1] >= sack_block2[0] - 1: #if sack block 1 is to the left of sack block 2 and they are adjacent or overlapping, merge them
+            return [min(sack_block1[0],sack_block2[0]),max(sack_block1[1],sack_block2[1])]
+        elif sack_block2[0] <= sack_block1[0] and sack_block2[1] >= sack_block1[0] - 1: #if sack block 2 is to the left of sack block 1 and they are adjacent or overlapping, merge them
+            return [min(sack_block1[0],sack_block2[0]),max(sack_block1[1],sack_block2[1])]
         else:
-            upper_bound_index = middle_index
-    #print(lower_bound_index,upper_bound_index)
-    #print(sack_blocks[lower_bound_index],sack_blocks[upper_bound_index])
+            return None
 
-    lower_block = sack_blocks[lower_bound_index]
-    upper_block = sack_blocks[upper_bound_index]
+def merge_sack_block_lists(sack_blocks1,sack_blocks2):
+        merged_sack_blocks = []
+        i = 0
+        j = 0
+        while i < len(sack_blocks1) and j < len(sack_blocks2):
+            merged_block = merge_sack_blocks(sack_blocks1[i],sack_blocks2[j])
+            if merged_block:
+                merged_sack_blocks.append(merged_block)
+                i += 1
+                j += 1
+            elif sack_blocks1[i][0] < sack_blocks2[j][0]:
+                merged_sack_blocks.append(sack_blocks1[i])
+                i += 1
+            else:
+                merged_sack_blocks.append(sack_blocks2[j])
+                j += 1
+        while i < len(sack_blocks1):
+            merged_sack_blocks.append(sack_blocks1[i])
+            i += 1
+        while j < len(sack_blocks2):
+            merged_sack_blocks.append(sack_blocks2[j])
+            j += 1
+        return merged_sack_blocks
 
-    if determine_adjacent(lower_block,seq_num) == "lower":
-        sack_blocks[lower_bound_index][0] -= 1
-    elif determine_adjacent(upper_block,seq_num) == "upper":
-        sack_blocks[upper_bound_index][1] += 1
-    elif determine_adjacent(lower_block,seq_num) == "none" and determine_adjacent(upper_block,seq_num) == "none":
-        lower_bound_avg = find_sack_block_avg(lower_block)
-        upper_bound_avg = find_sack_block_avg(upper_block)
-        if lower_bound_avg > seq_num:
-            sack_blocks.insert(lower_bound_index, [seq_num,seq_num])
-        elif upper_bound_avg < seq_num:
-            sack_blocks.insert(upper_bound_index + 1, [seq_num,seq_num])
+sack_blocks1 = []
+sack_blocks2 = []
+print(merge_sack_block_lists(sack_blocks1,sack_blocks2))
+
+def absorb_sacks(cumulative_ack, sack_blocks):
+    """
+    Consolidates SACK blocks into the cumulative_ack if they touch or overlap.
+    Returns the new cumulative_ack and the remaining (unabsorbed) sack_blocks.
+    """
+    if not sack_blocks:
+        return cumulative_ack, []
+
+    # Ensure blocks are sorted by start sequence
+    sack_blocks.sort()
+    
+    # Merge overlapping or adjacent SACK blocks first
+    merged = []
+    curr_start, curr_end = sack_blocks[0]
+    for next_start, next_end in sack_blocks[1:]:
+        if next_start <= curr_end + 1:
+            curr_end = max(curr_end, next_end)
         else:
-            sack_blocks.insert(lower_bound_index + 1, [seq_num,seq_num])
-    elif determine_adjacent(lower_block,seq_num) == "upper" and determine_adjacent(upper_block,seq_num) == "lower":
-        sack_blocks[lower_bound_index][1] = sack_blocks[upper_bound_index][1]
-        del sack_blocks[upper_bound_index]
-    elif determine_adjacent(lower_block,seq_num) == "upper":
-        sack_blocks[lower_bound_index][1] += 1
-    elif determine_adjacent(upper_block,seq_num) == "lower":
-        sack_blocks[upper_bound_index][0] -= 1
-    return sack_blocks
+            merged.append([curr_start, curr_end])
+            curr_start, curr_end = next_start, next_end
+    merged.append([curr_start, curr_end])
 
-alist = [[1,5],[7,9],[11,11],[14,20]]
-#print("before:",alist)
-#print("updated (13):",update_SACK_blocks(alist,13))
-#print("updated (12):",update_SACK_blocks(alist,12))
-#print("updated (21):",update_SACK_blocks(alist,21))
-#print("updated (10):",update_SACK_blocks(alist,10))
-#print("updated (6):",update_SACK_blocks(alist,6))
-#print("updated (0):",update_SACK_blocks(alist,0))
+    # Absorb merged blocks into the mainland
+    final_sacks = []
+    new_cum_ack = cumulative_ack
+    
+    for start, end in merged:
+        # If block touches or is behind the mainland, it's absorbed
+        if start <= new_cum_ack + 1:
+            new_cum_ack = max(new_cum_ack, end)
+        else:
+            # It's still an island
+            final_sacks.append([start, end])
 
-def find_missing_seq(sack_blocks,cumulative_ack):
-    missing_acks = []
-    ack_pointer = cumulative_ack
-    for sack_block in sack_blocks:
-        lower_bound = sack_block[0]
-        upper_bound = sack_block[1]
-        missing_acks.extend(list(range(ack_pointer + 1,lower_bound)))
-        ack_pointer = upper_bound
-    return missing_acks
+    return new_cum_ack, final_sacks
 
-
-
-def cum_ack_absorb(sack_blocks,cumulative_ack):
-    first_sack_block = sack_blocks[0]
-    lower_bound = first_sack_block[0]
-    upper_bound = first_sack_block[1]
-
-    if abs(lower_bound - cumulative_ack) <= 1:
-        cumulative_ack = upper_bound
-        del sack_blocks[0]
-    return sack_blocks,cumulative_ack
-
-
-strike_dictionary = dict()
-strike_dictionary[1] = 0
-strike_dictionary[3] = 0
-#assumes that ack already has entry in dictionary
-def process_ack_strike(strike_dictionary,ack_num):
-    if ack_num not in strike_dictionary:
-        return False
-    strike_dictionary[ack_num] += 1
-    if strike_dictionary[ack_num] >= 3:
-        strike_dictionary[ack_num] = 0 #reset the strike count and resend it
-        return True
-    return False #don't resend it
-
-blist = []
-update_SACK_blocks(blist,1)
-print(blist)
-update_SACK_blocks(blist,2)
-update_SACK_blocks(blist,4)
-print(blist)
+sack_blocks = [[2, 4], [5, 7], [10, 12]]
+cumulative_ack = 10
+print(absorb_sacks(cumulative_ack, sack_blocks))
