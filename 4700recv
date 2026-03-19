@@ -40,9 +40,18 @@ class Receiver:
             self.log("Error:  Received response from unexpected remote; ignoring")
             return None
         else:
-            self.log("Received message %s" % json.loads(data.decode("utf-8"))["data"][:25])
-            #self.log("Received message %s" % json.dumps(data))
-            return json.loads(data.decode("utf-8"))
+            # self.log("Received message %s" % json.loads(data.decode("utf-8"))["data"][:25])
+            try:
+                msg = json.loads(data.decode("utf-8"))
+                if "data" not in msg:
+                    self.log("Corrupted packet dropped")
+                    return None
+
+                self.log("Received message %s" % msg["data"][:25])
+                return msg
+            except:
+                self.log("Corrupted packet dropped")
+                return None
 
     def log(self, message):
         sys.stderr.write(message + "\n")
@@ -64,95 +73,43 @@ class Receiver:
         upper_bound = sack_block[1]
         return (lower_bound + upper_bound) / 2
     
-    def update_SACK_blocks(self,sack_blocks,seq_num):
-        if len(sack_blocks) == 0:
-            sack_blocks.append([seq_num,seq_num])
-            return sack_blocks
+    def rebuild_sack_blocks(self):
+        seqs = sorted(self.buffer_dictionary.keys())
+        blocks = []
 
-        avg_list = [self.find_sack_block_avg(sack_block) for sack_block in sack_blocks]
-        #print(avg_list)
-        lower_bound_index = 0
-        upper_bound_index = len(sack_blocks) - 1
-        while upper_bound_index - lower_bound_index > 1:
-            middle_index = (lower_bound_index + upper_bound_index) // 2
-            if avg_list[middle_index] < seq_num:
-                lower_bound_index = middle_index
+        start = None
+        prev = None
+
+        for s in seqs:
+            if s <= self.cumulative_ack:
+                continue
+
+            if start is None:
+                start = s
+                prev = s
+            elif s == prev + 1:
+                prev = s
             else:
-                upper_bound_index = middle_index
-        #print(lower_bound_index,upper_bound_index)
-        #print(sack_blocks[lower_bound_index],sack_blocks[upper_bound_index])
+                blocks.append([start, prev])
+                start = s
+                prev = s
 
-        lower_block = sack_blocks[lower_bound_index]
-        upper_block = sack_blocks[upper_bound_index]
+        if start is not None:
+            blocks.append([start, prev])
 
-        if self.determine_adjacent(lower_block,seq_num) == "lower":
-            sack_blocks[lower_bound_index][0] -= 1
-        elif self.determine_adjacent(upper_block,seq_num) == "upper":
-            sack_blocks[upper_bound_index][1] += 1
-        elif self.determine_adjacent(lower_block,seq_num) == "none" and self.determine_adjacent(upper_block,seq_num) == "none":
-            lower_bound_avg = self.find_sack_block_avg(lower_block)
-            upper_bound_avg = self.find_sack_block_avg(upper_block)
-            if lower_bound_avg > seq_num:
-                sack_blocks.insert(lower_bound_index, [seq_num,seq_num])
-            elif upper_bound_avg < seq_num:
-                sack_blocks.insert(upper_bound_index + 1, [seq_num,seq_num])
-            else:
-                sack_blocks.insert(lower_bound_index + 1, [seq_num,seq_num])
-        elif self.determine_adjacent(lower_block,seq_num) == "upper" and self.determine_adjacent(upper_block,seq_num) == "lower":
-            sack_blocks[lower_bound_index][1] = sack_blocks[upper_bound_index][1]
-            del sack_blocks[upper_bound_index]
-        elif self.determine_adjacent(lower_block,seq_num) == "upper":
-            sack_blocks[lower_bound_index][1] += 1
-        elif self.determine_adjacent(upper_block,seq_num) == "lower":
-            sack_blocks[upper_bound_index][0] -= 1
-        return sack_blocks
-    
-    '''def cum_ack_absorb(self,sack_blocks,cumulative_ack):
-        if sack_blocks:
-            
-            first_sack_block = sack_blocks[0]
-            lower_bound = first_sack_block[0]
-            upper_bound = first_sack_block[1]
-            old_cumulative_ack = cumulative_ack
+        return blocks
 
-            if abs(lower_bound - cumulative_ack) <= 1:
-                cumulative_ack = upper_bound
-                del sack_blocks[0]
-            while old_cumulative_ack < cumulative_ack: #go from old cumulative ack to the new cumulative ack to print out all sequence data left of the new cumulative ack.
-                old_cumulative_ack += 1
-                print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
-                del self.buffer_dictionary[old_cumulative_ack]
-            
-        
-        return sack_blocks,cumulative_ack'''
-    
     def is_data_corrupted(self, msg):
         expected = hashlib.md5(msg["data"].encode()).hexdigest()
         return expected != msg["checksum"]
     
-    def cum_ack_absorb(self,sack_blocks,cumulative_ack):
-        if sack_blocks:
-            for sack_block in sack_blocks:
-                lower_bound = sack_block[0]
-                upper_bound = sack_block[1]
-                old_cumulative_ack = cumulative_ack
-
-                if abs(lower_bound - cumulative_ack) <= 1:
-                    cumulative_ack = upper_bound
-                    sack_blocks.remove(sack_block)
-                while old_cumulative_ack < cumulative_ack: #go from old cumulative ack to the new cumulative ack to print out all sequence data left of the new cumulative ack.
-                    old_cumulative_ack += 1
-                    print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
-                    del self.buffer_dictionary[old_cumulative_ack]
-            
-        
-        return sack_blocks,cumulative_ack
-
     def run(self):
         while True:
-            socks = select.select([self.socket], [], [])[0] #This waits until we get a message packet on the scoket
+            socks = select.select([self.socket], [], [])[0] #This weits until we get a message packet on the scoket
             for conn in socks:
                 msg = self.recv(conn)
+                if not msg:
+                    continue
 
                 if msg:
                     if self.is_data_corrupted(msg):
@@ -164,18 +121,28 @@ class Receiver:
                         continue
 
                     # Print out the data to stdout in order
-                    #print(msg["data"], end='', flush=True)
                     seq_num = msg["seq"]
                     data = msg["data"]
 
-                    self.buffer_dictionary[seq_num] = data #immune to duplicates and out of order
-                    
-                    self.sack_blocks = self.update_SACK_blocks(self.sack_blocks,seq_num) #maybe make it regenerate SACK blocks from buffer dictionary every time???
-                    self.sack_blocks,self.cumulative_ack = self.cum_ack_absorb(self.sack_blocks,self.cumulative_ack)
+                    if seq_num not in self.buffer_dictionary:
+                        self.buffer_dictionary[seq_num] = data  
+                          
+                    while (self.cumulative_ack + 1) in self.buffer_dictionary:
+                        self.cumulative_ack += 1
+                        print(self.buffer_dictionary[self.cumulative_ack], end='', flush=True)
+                        del self.buffer_dictionary[self.cumulative_ack]
+
+                    # rebuild SACK from remaining buffer
+                    self.sack_blocks = self.rebuild_sack_blocks()
 
                     # Always send back an ack
                     #self.send({ "type": "ack", "seq": msg["seq"] })
-                    self.send({ "type": "ack", "cum_ack": self.cumulative_ack, "sack_blocks":self.sack_blocks })
+                    # self.send({ "type": "ack", "cum_ack": self.cumulative_ack, "sack_blocks":self.sack_blocks })
+                    self.send({
+                        "type": "ack",
+                        "ack": self.cumulative_ack,
+                        "sack": self.sack_blocks
+                    })
 
 
         return

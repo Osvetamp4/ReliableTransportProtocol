@@ -1,3 +1,3 @@
 # ReliableTransportProtocol
 
-FOR HARRY - SYSTEM DESIGN OVERVIEW
+FOR HARRY
