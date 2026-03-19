@@ -132,7 +132,6 @@ class Receiver:
                         print(self.buffer_dictionary[self.cumulative_ack], end='', flush=True)
                         del self.buffer_dictionary[self.cumulative_ack]
 
-                    # rebuild SACK from remaining buffer
                     self.sack_blocks = self.rebuild_sack_blocks()
 
                     # Always send back an ack

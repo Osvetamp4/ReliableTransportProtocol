@@ -60,7 +60,6 @@ class Sender:
     def recv(self, socket):
         data, addr = socket.recvfrom(65535)
 
-        # Grab the remote host/port if we don't already have it
         if self.remote_host is None:
             self.remote_host = addr[0]
             self.remote_port = addr[1]
@@ -109,22 +108,6 @@ class Sender:
     #assumes that ack already has entry in dictionary
     #given an ack_num, increment strike count in unacked_msgs dictionary and return true if we need to resend the message(reset count if we do)
     def process_ack_strike(self, ack_num):
-        # if ack_num not in self.unacked_msgs:
-        #     return False
-        # self.unacked_msgs[ack_num][0] += 1
-        # if self.unacked_msgs[ack_num][0] >= 3:
-        #     # congestion control - fast retransmit
-        #     self.ssthresh = max(2, self.window_size // 2)
-        #     self.window_size = self.ssthresh  # (TCP Reno)
-        #     self.log(f"FAST RETRANSMIT → window {self.window_size}, ssthresh {self.ssthresh}")
-        #     self.right_window_bound = self.left_window_bound + self.window_size - 1
-            
-        #     self.unacked_msgs[ack_num][0] = 0 #reset the strike count and resend it
-        #     self.resend_queue.append(ack_num) #add to resend queue
-        #     self.log("Ack %d strike count: %d" % (ack_num, self.unacked_msgs[ack_num][0]))
-        #     return True
-        # self.log("Ack %d strike count: %d" % (ack_num, self.unacked_msgs[ack_num][0]))
-        # return False #don't resend it
         if ack_num not in self.unacked_msgs:
             return False
 
@@ -175,10 +158,6 @@ class Sender:
             return merged_sack_blocks
 
     def absorb_sacks(self, cumulative_ack, sack_blocks):
-        """
-        Consolidates SACK blocks into the cumulative_ack if they touch or overlap.
-        Returns the new cumulative_ack and the remaining (unabsorbed) sack_blocks.
-        """
         if not sack_blocks:
             return cumulative_ack, []
 
@@ -215,7 +194,6 @@ class Sender:
             return True
         return False
     
-    #given a sack block list, determine if seq num is in any of the sack blocks return true if it is
     def if_seq_in_sack_blocks(self,sack_blocks,seq_num):
         for sack_block in sack_blocks:
             if self.determine_seq_in_sack_block(sack_block,seq_num):
@@ -263,7 +241,7 @@ class Sender:
             self.latest_sack_blocks = new_sack_blocks_temporary
             self.cumulative_ack, self.latest_sack_blocks = self.absorb_sacks(self.cumulative_ack,self.latest_sack_blocks)
                     
-            #Handles updating unacked_msgs, acked_in_window_msgs, and adding strikes to unacked messages that are holes
+            # updating unacked_msgs, acked_in_window_msgs, and adding strikes to unacked messages that are holes
             for seq in list(self.unacked_msgs.keys()):
                 if seq <= self.cumulative_ack: #if seq num to left of cumulative ack, then we can safely delete it from unacked msgs and acked in window
                     # calculating RTT
@@ -313,31 +291,6 @@ class Sender:
                 # Restart the timer for the new oldest packet.
                 self.oldest_packet_timestamp = time.time()
 
-    # def send_msg(self, current_seq, data=None):
-    #         # Case A: Retransmission (data is already provided)
-    #         if data is not None:
-    #             msg = { "type": "msg", "data": data, "seq": current_seq }
-    #             self.send(msg)
-            
-    #         # Case B: First-time send (must read from stdin)
-    #         else:
-    #             new_data = sys.stdin.read(DATA_SIZE)
-    #             if len(new_data) == 0:
-    #                 self.shutdown_phase = True
-    #                 # self.log("End of file reached.") # Optional log
-    #                 return # STOP HERE. Do not update latest_sequence_sent.
-                
-    #             # Only save and update goalpost if we actually got data!
-    #             self.unacked_msgs[current_seq] = [0, new_data, time.time()]
-    #             self.latest_sequence_sent = current_seq
-                
-    #             msg = { "type": "msg", "data": new_data, "seq": current_seq }
-    #             self.send(msg)
-
-    #         # Start timer if this is the first packet in flight
-    #         if self.oldest_packet_timestamp is None:
-    #             self.oldest_packet_timestamp = time.time()
-    
     def send_msg(self, current_seq, data=None):
         if data is None: # This is a first-time send attempt
             new_data = sys.stdin.read(DATA_SIZE)
@@ -345,9 +298,8 @@ class Sender:
             if len(new_data) == 0:
                 # We reached the real end of the file.
                 self.shutdown_phase = True
-                return # <--- CRITICAL: Exit now so latest_sequence_sent stays at 14
+                return 
             
-            # ONLY update the high-water mark if we actually read real data
             self.unacked_msgs[current_seq] = [0, new_data, time.time()]
             self.latest_sequence_sent = current_seq
             data = new_data # Use this for the physical send below
@@ -373,17 +325,6 @@ class Sender:
             self.resend_queue.append(oldest_seq)
             self.unacked_msgs[oldest_seq][0] = 0
         
-        # if time.time() - self.oldest_packet_timestamp >= self.timeout_duration:
-        #     target = self.cumulative_ack + 1
-            
-        #     # Only resend if the target is a real packet we actually sent!
-        #     if target <= self.latest_sequence_sent and target in self.unacked_msgs:
-        #         self.log(f"TIMEOUT: Resending actual missing packet {target}")
-        #         self.resend_queue.append(target)
-        #         self.unacked_msgs[target][0] = 0 
-                
-        #     self.oldest_packet_timestamp = time.time()
-           
     #error checking - check sum
     def compute_checksum(self, data):
         return hashlib.md5(data.encode()).hexdigest()
