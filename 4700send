@@ -109,6 +109,22 @@ class Sender:
     #assumes that ack already has entry in dictionary
     #given an ack_num, increment strike count in unacked_msgs dictionary and return true if we need to resend the message(reset count if we do)
     def process_ack_strike(self, ack_num):
+        # if ack_num not in self.unacked_msgs:
+        #     return False
+        # self.unacked_msgs[ack_num][0] += 1
+        # if self.unacked_msgs[ack_num][0] >= 3:
+        #     # congestion control - fast retransmit
+        #     self.ssthresh = max(2, self.window_size // 2)
+        #     self.window_size = self.ssthresh  # (TCP Reno)
+        #     self.log(f"FAST RETRANSMIT → window {self.window_size}, ssthresh {self.ssthresh}")
+        #     self.right_window_bound = self.left_window_bound + self.window_size - 1
+            
+        #     self.unacked_msgs[ack_num][0] = 0 #reset the strike count and resend it
+        #     self.resend_queue.append(ack_num) #add to resend queue
+        #     self.log("Ack %d strike count: %d" % (ack_num, self.unacked_msgs[ack_num][0]))
+        #     return True
+        # self.log("Ack %d strike count: %d" % (ack_num, self.unacked_msgs[ack_num][0]))
+        # return False #don't resend it
         if ack_num not in self.unacked_msgs:
             return False
 
@@ -116,7 +132,7 @@ class Sender:
 
         if self.unacked_msgs[ack_num][0] == 3:
             self.ssthresh = max(2, self.window_size // 2)
-            self.window_size = self.ssthresh + 1
+            self.window_size = self.ssthresh
             self.right_window_bound = self.left_window_bound + self.window_size - 1
 
             self.resend_queue.append(ack_num)
@@ -125,9 +141,9 @@ class Sender:
         return False
 
     def merge_sack_blocks(self,sack_block1,sack_block2):
-            if sack_block1[0] <= sack_block2[0] and sack_block1[1] >= sack_block2[0] - 1:
+            if sack_block1[0] <= sack_block2[0] and sack_block1[1] >= sack_block2[0] - 1: #if sack block 1 is to the left of sack block 2 and they are adjacent or overlapping, merge them
                 return [min(sack_block1[0],sack_block2[0]),max(sack_block1[1],sack_block2[1])]
-            elif sack_block2[0] <= sack_block1[0] and sack_block2[1] >= sack_block1[0] - 1:
+            elif sack_block2[0] <= sack_block1[0] and sack_block2[1] >= sack_block1[0] - 1: #if sack block 2 is to the left of sack block 1 and they are adjacent or overlapping, merge them
                 return [min(sack_block1[0],sack_block2[0]),max(sack_block1[1],sack_block2[1])]
             else:
                 return None
@@ -257,8 +273,7 @@ class Sender:
                     beta = 0.25
                     self.estimated_rtt = (1 - alpha) * self.estimated_rtt + alpha * sample_rtt
                     self.dev_rtt = (1 - beta) * self.dev_rtt + beta * abs(sample_rtt - self.estimated_rtt)
-                    # self.timeout_duration = self.estimated_rtt + 4 * self.dev_rtt
-                    self.timeout_duration = max(0.3, min(3.0, self.estimated_rtt + 4 * self.dev_rtt))
+                    self.timeout_duration = self.estimated_rtt + 4 * self.dev_rtt
                     self.log(f"Updated RTT estimates: Estimated RTT = {self.estimated_rtt:.3f}s, Timeout Duration = {self.timeout_duration:.3f}s")
                     
                     del self.unacked_msgs[seq]
@@ -280,13 +295,10 @@ class Sender:
             if self.cumulative_ack + 1 > self.left_window_bound:
                 self.left_window_bound = self.cumulative_ack + 1
                 #congestion control - AIMD
-                if self.cumulative_ack + 1 > self.left_window_bound:
-                    self.left_window_bound = self.cumulative_ack + 1
-
-                    if self.window_size < self.ssthresh:
-                        self.window_size *= 2
-                    else:
-                        self.window_size += 1
+                if self.window_size < self.ssthresh:
+                    self.window_size *= 2
+                else:
+                    self.window_size += 1
                 while self.left_window_bound in self.acked_in_window_msgs:
                     self.acked_in_window_msgs.remove(self.left_window_bound)
                     self.left_window_bound += 1
@@ -327,18 +339,20 @@ class Sender:
     #             self.oldest_packet_timestamp = time.time()
     
     def send_msg(self, current_seq, data=None):
-        if data is None: # first-time send attempt
+        if data is None: # This is a first-time send attempt
             new_data = sys.stdin.read(DATA_SIZE)
             
             if len(new_data) == 0:
-                # end of the file.
+                # We reached the real end of the file.
                 self.shutdown_phase = True
-                return
+                return # <--- CRITICAL: Exit now so latest_sequence_sent stays at 14
             
+            # ONLY update the high-water mark if we actually read real data
             self.unacked_msgs[current_seq] = [0, new_data, time.time()]
             self.latest_sequence_sent = current_seq
-            data = new_data
+            data = new_data # Use this for the physical send below
 
+        # Physical Send (Runs for both new data and retransmissions)
         msg = { "type": "msg", "data": data, "seq": current_seq, "checksum": self.compute_checksum(data) }
         self.send(msg)
 
