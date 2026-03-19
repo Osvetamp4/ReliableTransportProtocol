@@ -9,8 +9,6 @@ class Receiver:
         self.socket.bind(('0.0.0.0', 0))
         self.port = self.socket.getsockname()[1]
         self.log("Bound to port %d" % self.port)
-        
-        self.total_dictionary = dict() #dictionary of sequence numbers collected
 
         self.remote_host = None
         self.remote_port = None
@@ -108,14 +106,32 @@ class Receiver:
             sack_blocks[upper_bound_index][0] -= 1
         return sack_blocks
     
+    '''def cum_ack_absorb(self,sack_blocks,cumulative_ack):
+        if sack_blocks:
+            
+            first_sack_block = sack_blocks[0]
+            lower_bound = first_sack_block[0]
+            upper_bound = first_sack_block[1]
+            old_cumulative_ack = cumulative_ack
+
+            if abs(lower_bound - cumulative_ack) <= 1:
+                cumulative_ack = upper_bound
+                del sack_blocks[0]
+            while old_cumulative_ack < cumulative_ack: #go from old cumulative ack to the new cumulative ack to print out all sequence data left of the new cumulative ack.
+                old_cumulative_ack += 1
+                print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
+                del self.buffer_dictionary[old_cumulative_ack]
+            
+        
+        return sack_blocks,cumulative_ack'''
+    
     def is_data_corrupted(self, msg):
         expected = hashlib.md5(msg["data"].encode()).hexdigest()
         return expected != msg["checksum"]
     
     def cum_ack_absorb(self,sack_blocks,cumulative_ack):
         if sack_blocks:
-            self.log("SACK blocks before absorption: %s, cumulative_ack: %d" % (sack_blocks,cumulative_ack))
-            for sack_block in sack_blocks.copy():
+            for sack_block in sack_blocks:
                 lower_bound = sack_block[0]
                 upper_bound = sack_block[1]
                 old_cumulative_ack = cumulative_ack
@@ -123,37 +139,13 @@ class Receiver:
                 if abs(lower_bound - cumulative_ack) <= 1:
                     cumulative_ack = upper_bound
                     sack_blocks.remove(sack_block)
-                elif lower_bound <= cumulative_ack: #sack block needs to be absorbed.
-                    sack_blocks.remove(sack_block)
-                    if upper_bound > cumulative_ack:
-                        cumulative_ack = upper_bound
-                
                 while old_cumulative_ack < cumulative_ack: #go from old cumulative ack to the new cumulative ack to print out all sequence data left of the new cumulative ack.
                     old_cumulative_ack += 1
-                    if old_cumulative_ack in self.buffer_dictionary:
-                        print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
-                        del self.buffer_dictionary[old_cumulative_ack]
+                    print(self.buffer_dictionary[old_cumulative_ack],end='',flush=True)
+                    del self.buffer_dictionary[old_cumulative_ack]
             
-            counter = 0
-            while counter < len(sack_blocks) - 1:
-                if self.merge_sack_blocks(sack_blocks[counter],sack_blocks[counter + 1]):
-                    sack_blocks[counter] = self.merge_sack_blocks(sack_blocks[counter],sack_blocks[counter + 1])
-                    del sack_blocks[counter + 1]
-                else:
-                    counter += 1
-            self.log("SACK blocks after absorption: %s, cumulative_ack: %d" % (sack_blocks,cumulative_ack))
-            
+        
         return sack_blocks,cumulative_ack
-    
-    def merge_sack_blocks(self, sack_block1, sack_block2):
-        sack_block1_lower_bound = sack_block1[0]
-        sack_block1_upper_bound = sack_block1[1]
-        sack_block2_lower_bound = sack_block2[0]
-        sack_block2_upper_bound = sack_block2[1]
-
-        if sack_block1_upper_bound >= sack_block2_lower_bound or sack_block2_upper_bound >= sack_block1_lower_bound:
-            return [min(sack_block1_lower_bound,sack_block2_lower_bound),max(sack_block1_upper_bound,sack_block2_upper_bound)]
-        else:            return None
 
     def run(self):
         while True:
@@ -175,23 +167,13 @@ class Receiver:
                     seq_num = msg["seq"]
                     data = msg["data"]
 
-                    self.buffer_dictionary[seq_num] = data
-
-                    self.total_dictionary[seq_num] = data
-
-
-                    
+                    self.buffer_dictionary[seq_num] = data #immune to duplicates and out of order
                     
                     self.sack_blocks = self.update_SACK_blocks(self.sack_blocks,seq_num) #maybe make it regenerate SACK blocks from buffer dictionary every time???
                     self.sack_blocks,self.cumulative_ack = self.cum_ack_absorb(self.sack_blocks,self.cumulative_ack)
 
                     # Always send back an ack
                     #self.send({ "type": "ack", "seq": msg["seq"] })
-                    string_of_total_keys = ','.join(str(key) for key in sorted(self.total_dictionary.keys()))
-                    missing_keys = [key for key in range(min(self.total_dictionary.keys()),max(self.total_dictionary.keys()) + 1) if key not in self.total_dictionary]
-                    self.log("total dictionary keys: %s" % string_of_total_keys)
-                    self.log("missing keys: %s" % missing_keys)
-                    self.log("length: %d" % len(self.total_dictionary))
                     self.send({ "type": "ack", "cum_ack": self.cumulative_ack, "sack_blocks":self.sack_blocks })
 
 
